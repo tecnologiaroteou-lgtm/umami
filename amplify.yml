@@ -1,0 +1,40 @@
+# AWS Amplify Hosting build for Roteou's Umami (https://stats.roteou.com.br).
+# Same steps as `pnpm build`, with three changes for Amplify:
+# - pnpm installs hoisted and Next builds with webpack: Turbopack's
+#   .next/node_modules/<pkg>-<hash> links leave pg without pg-types on Amplify;
+# - VERCEL=1 only for `next build`, so next.config.ts skips output: 'standalone'
+#   (Amplify packages the regular .next output);
+# - Amplify gives env vars to the build only, so the ones the server reads are
+#   copied (quoted) into .env.production.
+# Migrations run in check:db against DIRECT_DATABASE_URL (sslmode=require);
+# the app connects with DATABASE_URL (sslmode=no-verify: TLS without checking
+# the RDS CA, which Node doesn't ship).
+version: 1
+frontend:
+  phases:
+    preBuild:
+      commands:
+        - nvm install 22 && nvm use 22
+        - corepack enable && corepack prepare pnpm@12.3.4 --activate
+        - pnpm config set store-dir .pnpm-store
+        - pnpm install --frozen-lockfile --config.node-linker=hoisted
+    build:
+      commands:
+        - env | grep -E '^(DATABASE_URL|APP_SECRET|DISABLE_|TRACKER_SCRIPT_NAME|COLLECT_API_ENDPOINT|CLIENT_IP_HEADER|IGNORE_IP|LOG_QUERY|BASE_PATH)' | sed -E 's/^([^=]+)=(.*)$/\1="\2"/' >> .env.production
+        - pnpm run check:env
+        - pnpm run build:db
+        - pnpm run check:db
+        - pnpm run build:tracker
+        - pnpm run build:recorder
+        - pnpm run build:geo
+        - pnpm run build:openapi
+        - pnpm run build:packages
+        - VERCEL=1 pnpm exec next build --webpack
+  artifacts:
+    baseDirectory: .next
+    files:
+      - '**/*'
+  cache:
+    paths:
+      - .pnpm-store/**/*
+      - .next/cache/**/*
